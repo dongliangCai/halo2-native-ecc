@@ -16,6 +16,7 @@ use crate::AssignedECPoint;
 
 #[cfg(test)]
 mod tests;
+mod test_dleq;
 
 pub trait NativeECOps<C, F>
 where
@@ -104,17 +105,31 @@ where
         C: CurveAffine<ScalarExt = S>;
 
     /// Point mul via double-then-add method
-    fn point_mul<S>(
+    fn point_mul_assigned<S>(
         &self,
         region: &mut Region<F>,
         config: &Self::Config,
         p: &C,
-        s: &C::ScalarExt,
+        p: &AssignedECPoint<C, F>,
+        s: &[AssignedCell<F,F>],
         offset: &mut usize,
     ) -> Result<Self::AssignedECPoint, Error>
     where
         S: PrimeField<Repr = [u8; 32]>,
         C: CurveAffine<ScalarExt = S>;
+    
+    /// Point mul via double-then-add method
+    fn point_mul<S>(
+            &self,
+            region: &mut Region<F>,
+            config: &Self::Config,
+            p: &C,
+            s: &C::ScalarExt,
+            offset: &mut usize,
+        ) -> Result<Self::AssignedECPoint, Error>
+        where
+            S: PrimeField<Repr = [u8; 32]>,
+            C: CurveAffine<ScalarExt = S>;
 
     /// Pad the row with empty cells.
     fn pad(
@@ -299,6 +314,85 @@ where
 
     /// Point mul via double-then-add method
     // todo: assigned point -> point
+    fn point_mul_assigned<S>(
+        &self,
+        region: &mut Region<F>,
+        config: &Self::Config,
+        p: &C,
+        p_assigned: &AssignedECPoint<C, F>,
+        bits: &[AssignedCell<F, F>],
+        offset: &mut usize,
+    ) -> Result<Self::AssignedECPoint, Error>
+    where
+        S: PrimeField<Repr = [u8; 32]>,
+        C: CurveAffine<ScalarExt = S>,
+    {
+        let gen = C::generator();
+        // let bits = self.decompose_scalar(region, config, s, offset)?;
+
+        // let p_assigned = self.load_private_point(region, config, p, offset)?;
+        let gen_assigned = self.load_private_point(region, config, &gen, offset)?;
+
+        // we do not have a cell representation for infinity point
+        // therefore we first compute
+        //  res = 2^256 * generator + p *s
+        // ans then subtract 2^256 * generator from res
+        let mut res: AssignedECPoint<C, F> = gen_assigned;
+
+        // begin the `double-then-add` loop
+        for b in bits.iter().rev() {
+            // double
+            let res_double = self.point_double(region, config, &res, offset)?;
+
+            // conditional add depending on the bit b
+            res = {
+                let p_copied = if leak(&b.value()) == F::ONE {
+                    // copy the base point cells
+                    let p_copied: AssignedECPoint<C, F> =
+                        self.load_private_point_unchecked(region, config, p, offset)?;
+                    region.constrain_equal(p_copied.x.cell(), p_assigned.x.cell())?;
+                    region.constrain_equal(p_copied.y.cell(), p_assigned.y.cell())?;
+                    p_copied
+                } else {
+                    // the point here doesn't matter but we do need to fill in the cells
+                    self.load_private_point_unchecked(region, config, &gen, offset)?
+                };
+
+                // copy the bit cell; already constraint `bit` is either 0 or 1
+                let bit = self.load_two_private_fields(
+                    region,
+                    config,
+                    &leak(&b.value()),
+                    &F::ZERO,
+                    offset,
+                )?;
+                region.constrain_equal(bit[0].cell(), b.cell())?;
+
+                // conditional add
+                self.conditional_point_add(region, config, &res_double, &p_copied, &bit[0], offset)?
+            };
+        }
+
+        // now we subtract 2^256 * generator from res
+        let (offset_generator, x, y) = neg_generator_times_2_to_256::<C, C::Base>();
+        let offset_generator_assigned =
+            self.load_private_point_unchecked(region, config, &offset_generator, offset)?;
+        let bit = self.load_two_private_fields(region, config, &F::ONE, &F::ZERO, offset)?;
+        res = self.conditional_point_add(
+            region,
+            config,
+            &res,
+            &offset_generator_assigned,
+            &bit[0],
+            offset,
+        )?;
+        // ensure the `subtract 2^256 * generator` cells are fixed constants
+        region.constrain_constant(offset_generator_assigned.x.cell(), x)?;
+        region.constrain_constant(offset_generator_assigned.y.cell(), y)?;
+
+        Ok(res)
+    }
+
     fn point_mul<S>(
         &self,
         region: &mut Region<F>,

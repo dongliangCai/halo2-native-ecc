@@ -6,9 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2023_04_20" }
+#halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v2023_04_20" }
+halo2_proofs = { git = "https://github.com/privacy-scaling-explorations/halo2.git", tag = "v0.3.0" }
 halo2curves = { git = "https://github.com/privacy-scaling-explorations/halo2curves.git", rev = "8e4cb9f0c66c864e8ca25da07f50ae95f664a5b7" }
 ark-std = { version = "0.4.0", features = ["print-trace"] }
+rand_xorshift = "0.3"
 
 [features]
 default = []
